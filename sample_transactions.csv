@@ -1,0 +1,9 @@
+transaction_id,date,customer_name,amount,reference,status,payment_method
+TXN001,2026-05-01,Amina Yusuf,50000,REF1001,Paid,Transfer
+TXN002,2026-05-02,Tunde Bello,75000,REF1002,Paid,Card
+TXN003,2026-05-03,,120000,REF1003,Pending,Transfer
+TXN004,2026-05-04,Grace Okafor,-30000,REF1004,Paid,Cash
+TXN005,2026-05-05,Ibrahim Musa,0,REF1005,Failed,Card
+TXN006,wrong-date,Blessing Ade,45000,REF1006,Paid,Transfer
+TXN007,2026-05-07,Amina Yusuf,50000,REF1001,Paid,Transfer
+,2026-05-08,David Eze,65000,REF1008,Completed,Card
