@@ -1,6 +1,6 @@
 # DataTrust Audit
 
-A Streamlit app that audits uploaded CSV datasets for common data quality issues and generates a downloadable Excel report.
+A Streamlit app that audits uploaded CSV and Excel datasets for common data quality issues and generates downloadable Excel reports.
 
 ## Problem
 
@@ -8,13 +8,13 @@ Business teams often use datasets that contain missing values, duplicates, inval
 
 ## Solution
 
-This app allows users to upload a CSV file, review a dataset summary, run data quality checks, view affected rows, receive an overall recommendation, and download an Excel audit report.
+This app allows users to upload a CSV or Excel file, review a dataset summary, run data quality checks, view affected rows, receive an overall recommendation, view issue charts, and download Excel reports.
 
 DataTrust Audit helps users quickly understand whether a dataset is ready for analysis, reporting, reconciliation, or decision-making.
 
 ## Features
 
-- Upload any CSV dataset
+- Upload CSV or Excel datasets
 - Detect missing values across all columns
 - Detect duplicate rows
 - Select optional columns for deeper checks
@@ -26,7 +26,9 @@ DataTrust Audit helps users quickly understand whether a dataset is ready for an
 - Generate a data quality score
 - Show an overall recommendation
 - Show affected rows with recommended actions
+- View simple issue charts
 - Download a multi-sheet Excel audit report
+- Download a cleaned dataset with standardized headers, trimmed text values, and duplicate rows removed
 
 ## Tools Used
 
@@ -34,14 +36,14 @@ DataTrust Audit helps users quickly understand whether a dataset is ready for an
 - Pandas
 - Streamlit
 - OpenPyXL
-- Excel
+- Excel / OpenPyXL / xlrd
 
 ## How To Run Locally
 
 Install the required packages:
 
 ```bash
-pip install pandas streamlit openpyxl
+pip install pandas streamlit openpyxl xlrd
 ```
 
 Run the app:
@@ -52,7 +54,7 @@ streamlit run app.py
 
 ## Sample Dataset
 
-The project includes `sample_transactions.csv` for testing. You can also upload your own CSV file.
+The project includes `sample_transactions.csv` for testing. You can also upload your own CSV or Excel file.
 
 ## Excel Report Sheets
 
@@ -64,11 +66,9 @@ The downloaded report contains:
 
 ## Future Improvements
 
-- Add Excel file upload support
 - Add automatic column suggestions
-- Add visual charts for data quality issues
-- Add cleaned dataset download
 - Add multi-source reconciliation checks
+- Add stronger cleaning rules users can choose before downloading cleaned data
 
 ## Author
 

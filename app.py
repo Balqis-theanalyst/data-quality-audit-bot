@@ -8,18 +8,26 @@ st.set_page_config(page_title="DataTrust Audit", layout="wide")
 
 st.title("DataTrust Audit")
 st.write(
-    "Audit uploaded CSV datasets for missing values, duplicates, invalid dates, "
+    "Audit uploaded CSV or Excel datasets for missing values, duplicates, invalid dates, "
     "invalid numbers, category issues, and overall data readiness."
 )
-st.caption("Upload a CSV file with clear column headers for the best results.")
+st.caption("Upload a CSV or Excel file with clear column headers for the best results.")
 
-uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
+uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx", "xls"])
 
 VALID_STATUSES = ["Paid", "Pending", "Failed", "Reversed"]
 MAX_AFFECTED_ROWS = 1000
 
 
-def read_uploaded_csv(file):
+def read_uploaded_file(file):
+    file_name = file.name.lower()
+
+    if file_name.endswith((".xlsx", ".xls")):
+        try:
+            return pd.read_excel(file), None
+        except Exception as error:
+            return None, f"I could not read this Excel file: {error}"
+
     encodings = ["utf-8", "utf-8-sig", "latin1", "cp1252"]
 
     for encoding in encodings:
@@ -41,6 +49,18 @@ def clean_column_name(column):
 
 def is_blank(value):
     return pd.isna(value) or str(value).strip() == ""
+
+
+def create_cleaned_dataset(df):
+    cleaned_df = df.copy()
+    cleaned_df.columns = [clean_column_name(column) for column in cleaned_df.columns]
+
+    text_columns = cleaned_df.select_dtypes(include=["object"]).columns
+    for column in text_columns:
+        cleaned_df[column] = cleaned_df[column].astype("string").str.strip()
+
+    cleaned_df = cleaned_df.drop_duplicates()
+    return cleaned_df
 
 
 def run_audit(
@@ -276,6 +296,16 @@ def create_excel_file(audit_report, affected_rows_report, quality_score, recomme
     return output
 
 
+def create_cleaned_excel_file(cleaned_df):
+    output = BytesIO()
+
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        cleaned_df.to_excel(writer, sheet_name="Cleaned Dataset", index=False)
+
+    output.seek(0)
+    return output
+
+
 def get_overall_recommendation(quality_score):
     if quality_score >= 95:
         return (
@@ -321,8 +351,13 @@ def get_download_file_name(uploaded_file_name):
     return f"{clean_name}_data_quality_audit_report.xlsx"
 
 
+def get_cleaned_download_file_name(uploaded_file_name):
+    clean_name = uploaded_file_name.rsplit(".", 1)[0].replace(" ", "_").lower()
+    return f"{clean_name}_cleaned_dataset.xlsx"
+
+
 if uploaded_file is not None:
-    df, read_error = read_uploaded_csv(uploaded_file)
+    df, read_error = read_uploaded_file(uploaded_file)
 
     if read_error:
         st.error(read_error)
@@ -411,6 +446,22 @@ if uploaded_file is not None:
         st.subheader("Audit Summary")
         st.dataframe(audit_report)
 
+        chart_data = audit_report[audit_report["issue_count"] > 0]
+        if not chart_data.empty:
+            st.subheader("Issue Charts")
+            chart_left, chart_right = st.columns(2)
+            with chart_left:
+                st.write("Issues by Check")
+                st.bar_chart(chart_data.set_index("check")["issue_count"])
+            with chart_right:
+                st.write("Issues by Severity")
+                severity_chart = (
+                    chart_data.groupby("severity", as_index=False)["issue_count"]
+                    .sum()
+                    .set_index("severity")
+                )
+                st.bar_chart(severity_chart)
+
         st.subheader("Severity Summary")
         severity_summary = get_severity_summary(audit_report)
         high, medium, low = st.columns(3)
@@ -441,6 +492,15 @@ if uploaded_file is not None:
             label="Download Excel Audit Report",
             data=excel_file,
             file_name=get_download_file_name(uploaded_file.name),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        cleaned_df = create_cleaned_dataset(df)
+        cleaned_excel_file = create_cleaned_excel_file(cleaned_df)
+        st.download_button(
+            label="Download Cleaned Dataset",
+            data=cleaned_excel_file,
+            file_name=get_cleaned_download_file_name(uploaded_file.name),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
