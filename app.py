@@ -54,13 +54,69 @@ def is_blank(value):
 def create_cleaned_dataset(df):
     cleaned_df = df.copy()
     cleaned_df.columns = [clean_column_name(column) for column in cleaned_df.columns]
+    cleaning_steps = []
+
+    duplicate_rows_removed = int(cleaned_df.duplicated().sum())
 
     text_columns = cleaned_df.select_dtypes(include=["object"]).columns
     for column in text_columns:
         cleaned_df[column] = cleaned_df[column].astype("string").str.strip()
+        missing_count = int(cleaned_df[column].map(is_blank).sum())
+
+        if missing_count > 0:
+            cleaned_df[column] = cleaned_df[column].mask(
+                cleaned_df[column].map(is_blank),
+                "Not Available",
+            )
+            cleaning_steps.append(
+                {
+                    "column": column,
+                    "cleaning_action": "Filled missing text values",
+                    "affected_rows": missing_count,
+                    "replacement_value": "Not Available",
+                }
+            )
+
+    numeric_columns = cleaned_df.select_dtypes(include=["number"]).columns
+    for column in numeric_columns:
+        missing_count = int(cleaned_df[column].isna().sum())
+
+        if missing_count > 0:
+            column_mean = cleaned_df[column].mean()
+            cleaned_df[column] = cleaned_df[column].fillna(column_mean)
+            cleaning_steps.append(
+                {
+                    "column": column,
+                    "cleaning_action": "Filled missing numeric values with column mean",
+                    "affected_rows": missing_count,
+                    "replacement_value": round(column_mean, 2),
+                }
+            )
 
     cleaned_df = cleaned_df.drop_duplicates()
-    return cleaned_df
+
+    if duplicate_rows_removed > 0:
+        cleaning_steps.append(
+            {
+                "column": "all columns",
+                "cleaning_action": "Removed duplicate rows",
+                "affected_rows": duplicate_rows_removed,
+                "replacement_value": "N/A",
+            }
+        )
+
+    if not cleaning_steps:
+        cleaning_steps.append(
+            {
+                "column": "all columns",
+                "cleaning_action": "No cleaning changes were needed",
+                "affected_rows": 0,
+                "replacement_value": "N/A",
+            }
+        )
+
+    cleaning_summary = pd.DataFrame(cleaning_steps)
+    return cleaned_df, cleaning_summary
 
 
 def run_audit(
@@ -296,10 +352,11 @@ def create_excel_file(audit_report, affected_rows_report, quality_score, recomme
     return output
 
 
-def create_cleaned_excel_file(cleaned_df):
+def create_cleaned_excel_file(cleaned_df, cleaning_summary):
     output = BytesIO()
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        cleaning_summary.to_excel(writer, sheet_name="Cleaning Summary", index=False)
         cleaned_df.to_excel(writer, sheet_name="Cleaned Dataset", index=False)
 
     output.seek(0)
@@ -495,8 +552,10 @@ if uploaded_file is not None:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
-        cleaned_df = create_cleaned_dataset(df)
-        cleaned_excel_file = create_cleaned_excel_file(cleaned_df)
+        cleaned_df, cleaning_summary = create_cleaned_dataset(df)
+        cleaned_excel_file = create_cleaned_excel_file(cleaned_df, cleaning_summary)
+        st.subheader("Cleaned Dataset Summary")
+        st.dataframe(cleaning_summary)
         st.download_button(
             label="Download Cleaned Dataset",
             data=cleaned_excel_file,

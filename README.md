@@ -28,7 +28,8 @@ DataTrust Audit helps users quickly understand whether a dataset is ready for an
 - Show affected rows with recommended actions
 - View simple issue charts
 - Download a multi-sheet Excel audit report
-- Download a cleaned dataset with standardized headers, trimmed text values, and duplicate rows removed
+- Download a cleaned dataset with standardized headers, trimmed text values, missing text filled as `Not Available`, missing numeric values filled with the column mean, and duplicate rows removed
+- View a cleaning summary showing what changed in the cleaned dataset
 
 ## Tools Used
 
@@ -69,6 +70,7 @@ The downloaded report contains:
 - Add automatic column suggestions
 - Add multi-source reconciliation checks
 - Add stronger cleaning rules users can choose before downloading cleaned data
+- Add user-selectable cleaning options for mean, median, zero, or custom fill values
 
 ## Author
 
