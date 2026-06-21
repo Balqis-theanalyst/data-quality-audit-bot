@@ -25,10 +25,15 @@ DataTrust Audit helps users quickly understand whether a dataset is ready for an
 - Check invalid status or category values
 - Generate a data quality score
 - Show an overall recommendation
+- Show a recommended next action
+- Generate an AI/Data Readiness score
+- Show readiness for reporting, dashboarding, reconciliation, and AI/ML workflows
+- Show a column health report
 - Show affected rows with recommended actions
 - View simple issue charts
 - Download a multi-sheet Excel audit report
-- Download a cleaned dataset with standardized headers, trimmed text values, missing text filled as `Not Available`, missing numeric values filled with the column mean, and duplicate rows removed
+- Choose how missing values should be handled in the cleaned dataset
+- Download a cleaned dataset with standardized headers, trimmed text values, filled missing values, and optional duplicate row removal
 - View a cleaning summary showing what changed in the cleaned dataset
 
 ## Tools Used
@@ -62,6 +67,9 @@ The project includes `sample_transactions.csv` for testing. You can also upload 
 The downloaded report contains:
 
 - Overall Recommendation
+- AI Data Readiness
+- Use Case Readiness
+- Column Health
 - Audit Summary
 - Affected Rows
 

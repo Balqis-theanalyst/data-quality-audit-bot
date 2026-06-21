@@ -51,7 +51,12 @@ def is_blank(value):
     return pd.isna(value) or str(value).strip() == ""
 
 
-def create_cleaned_dataset(df):
+def create_cleaned_dataset(
+    df,
+    text_fill_value="Not Available",
+    numeric_fill_strategy="Mean",
+    remove_duplicate_rows=True,
+):
     cleaned_df = df.copy()
     cleaned_df.columns = [clean_column_name(column) for column in cleaned_df.columns]
     cleaning_steps = []
@@ -66,14 +71,14 @@ def create_cleaned_dataset(df):
         if missing_count > 0:
             cleaned_df[column] = cleaned_df[column].mask(
                 cleaned_df[column].map(is_blank),
-                "Not Available",
+                text_fill_value,
             )
             cleaning_steps.append(
                 {
                     "column": column,
                     "cleaning_action": "Filled missing text values",
                     "affected_rows": missing_count,
-                    "replacement_value": "Not Available",
+                    "replacement_value": text_fill_value,
                 }
             )
 
@@ -82,20 +87,27 @@ def create_cleaned_dataset(df):
         missing_count = int(cleaned_df[column].isna().sum())
 
         if missing_count > 0:
-            column_mean = cleaned_df[column].mean()
-            cleaned_df[column] = cleaned_df[column].fillna(column_mean)
+            if numeric_fill_strategy == "Median":
+                replacement_value = cleaned_df[column].median()
+            elif numeric_fill_strategy == "Zero":
+                replacement_value = 0
+            else:
+                replacement_value = cleaned_df[column].mean()
+
+            cleaned_df[column] = cleaned_df[column].fillna(replacement_value)
             cleaning_steps.append(
                 {
                     "column": column,
-                    "cleaning_action": "Filled missing numeric values with column mean",
+                    "cleaning_action": f"Filled missing numeric values with {numeric_fill_strategy.lower()}",
                     "affected_rows": missing_count,
-                    "replacement_value": round(column_mean, 2),
+                    "replacement_value": round(replacement_value, 2),
                 }
             )
 
-    cleaned_df = cleaned_df.drop_duplicates()
+    if remove_duplicate_rows:
+        cleaned_df = cleaned_df.drop_duplicates()
 
-    if duplicate_rows_removed > 0:
+    if remove_duplicate_rows and duplicate_rows_removed > 0:
         cleaning_steps.append(
             {
                 "column": "all columns",
@@ -329,7 +341,16 @@ def run_audit(
     return audit_report, affected_rows_report, round(quality_score, 2)
 
 
-def create_excel_file(audit_report, affected_rows_report, quality_score, recommendation_title, recommendation_message):
+def create_excel_file(
+    audit_report,
+    affected_rows_report,
+    quality_score,
+    recommendation_title,
+    recommendation_message,
+    readiness_report,
+    use_case_report,
+    column_health_report,
+):
     output = BytesIO()
     recommendation_report = pd.DataFrame(
         [
@@ -345,6 +366,9 @@ def create_excel_file(audit_report, affected_rows_report, quality_score, recomme
         recommendation_report.to_excel(
             writer, sheet_name="Overall Recommendation", index=False
         )
+        readiness_report.to_excel(writer, sheet_name="AI Data Readiness", index=False)
+        use_case_report.to_excel(writer, sheet_name="Use Case Readiness", index=False)
+        column_health_report.to_excel(writer, sheet_name="Column Health", index=False)
         audit_report.to_excel(writer, sheet_name="Audit Summary", index=False)
         affected_rows_report.to_excel(writer, sheet_name="Affected Rows", index=False)
 
@@ -383,6 +407,129 @@ def get_overall_recommendation(quality_score):
         "Poor data quality",
         "This dataset is not ready for reliable analysis. Clean the major issues first, then audit it again.",
     )
+
+
+def get_next_action(audit_report):
+    high_issues = audit_report[audit_report["severity"] == "High"]["issue_count"].sum()
+    medium_issues = audit_report[audit_report["severity"] == "Medium"]["issue_count"].sum()
+
+    if high_issues > 0:
+        return "Fix high-severity issues first, then rerun the audit before using this dataset."
+    if medium_issues > 0:
+        return "Review medium-severity issues before final reporting or dashboarding."
+    return "Dataset is in good shape. Do a final business review before using it."
+
+
+def get_ai_readiness_report(df, audit_report):
+    rows = max(1, len(df))
+    total_cells = max(1, rows * max(1, len(df.columns)))
+    missing_rate = df.apply(lambda column: column.map(is_blank).sum()).sum() / total_cells
+    duplicate_rate = df.duplicated().sum() / rows
+    high_issue_count = audit_report[audit_report["severity"] == "High"]["issue_count"].sum()
+    medium_issue_count = audit_report[audit_report["severity"] == "Medium"]["issue_count"].sum()
+    messy_headers = sum(1 for column in df.columns if column != clean_column_name(column))
+    messy_header_rate = messy_headers / max(1, len(df.columns))
+
+    score = 100
+    score -= min(40, missing_rate * 100)
+    score -= min(25, duplicate_rate * 100)
+    score -= min(20, (high_issue_count / rows) * 20)
+    score -= min(10, (medium_issue_count / rows) * 10)
+    score -= min(5, messy_header_rate * 10)
+    score = round(max(0, score), 2)
+
+    if score >= 90:
+        level = "AI-ready with light review"
+        recommendation = "This dataset is broadly ready for analysis or AI workflows after a business-context review."
+    elif score >= 75:
+        level = "Nearly ready"
+        recommendation = "Clean the highlighted issues before using this dataset for AI, modeling, or automated decisions."
+    elif score >= 60:
+        level = "Needs preparation"
+        recommendation = "The dataset needs cleaning and validation before serious analysis or AI use."
+    else:
+        level = "Not AI-ready"
+        recommendation = "Do not use this dataset for AI workflows yet. Resolve major data quality issues first."
+
+    return pd.DataFrame(
+        [
+            {
+                "ai_data_readiness_score": f"{score}%",
+                "readiness_level": level,
+                "recommendation": recommendation,
+            }
+        ]
+    )
+
+
+def get_use_case_readiness_report(quality_score, unique_column=None, date_column=None, amount_column=None):
+    reporting = "Ready" if quality_score >= 85 else "Needs cleanup"
+    dashboarding = "Ready" if quality_score >= 85 else "Review before dashboarding"
+    reconciliation = (
+        "Ready to test"
+        if unique_column and amount_column
+        else "Needs ID/reference and amount columns"
+    )
+    ai_workflow = "Ready with review" if quality_score >= 90 else "Needs preparation"
+
+    return pd.DataFrame(
+        [
+            {
+                "use_case": "Reporting",
+                "readiness": reporting,
+                "note": "Best when missing values and duplicate rows are resolved.",
+            },
+            {
+                "use_case": "Dashboarding",
+                "readiness": dashboarding,
+                "note": "Best when categories, dates, and numeric fields are consistent.",
+            },
+            {
+                "use_case": "Reconciliation",
+                "readiness": reconciliation,
+                "note": "Needs reliable reference/ID and amount columns for matching.",
+            },
+            {
+                "use_case": "AI/ML Workflow",
+                "readiness": ai_workflow,
+                "note": "Needs clean structure, low missingness, and validated labels/categories.",
+            },
+        ]
+    )
+
+
+def get_column_health_report(df):
+    rows = max(1, len(df))
+    health_rows = []
+
+    for column in df.columns:
+        missing_count = int(df[column].map(is_blank).sum())
+        duplicate_count = int(df[column].duplicated().sum())
+        unique_count = int(df[column].nunique(dropna=True))
+        missing_rate = round((missing_count / rows) * 100, 2)
+
+        if missing_rate == 0:
+            note = "Healthy"
+        elif missing_rate <= 10:
+            note = "Minor missing values"
+        elif missing_rate <= 30:
+            note = "Needs review"
+        else:
+            note = "High missingness"
+
+        health_rows.append(
+            {
+                "column": column,
+                "data_type": str(df[column].dtype),
+                "missing_count": missing_count,
+                "missing_rate": f"{missing_rate}%",
+                "unique_values": unique_count,
+                "duplicate_values": duplicate_count,
+                "readiness_note": note,
+            }
+        )
+
+    return pd.DataFrame(health_rows)
 
 
 def get_dataset_summary(df):
@@ -481,6 +628,19 @@ if uploaded_file is not None:
             "Remove any value that should be treated as invalid, then run the audit."
         )
 
+    st.subheader("Cleaning Options")
+    clean_left, clean_middle, clean_right = st.columns(3)
+    with clean_left:
+        text_fill_value = st.text_input("Fill missing text values with", "Not Available")
+    with clean_middle:
+        numeric_fill_strategy = st.selectbox(
+            "Fill missing numeric values with",
+            ["Mean", "Median", "Zero"],
+            index=0,
+        )
+    with clean_right:
+        remove_duplicate_rows = st.checkbox("Remove duplicate rows", value=True)
+
     if st.button("Run Audit"):
         audit_report, affected_rows_report, quality_score = run_audit(
             df,
@@ -499,6 +659,22 @@ if uploaded_file is not None:
         )
         st.subheader("Overall Recommendation")
         st.info(f"**{recommendation_title}:** {recommendation_message}")
+        st.info(f"**Recommended Next Action:** {get_next_action(audit_report)}")
+
+        readiness_report = get_ai_readiness_report(df, audit_report)
+        use_case_report = get_use_case_readiness_report(
+            quality_score,
+            unique_column=unique_column,
+            date_column=date_column,
+            amount_column=amount_column,
+        )
+        column_health_report = get_column_health_report(df)
+
+        st.subheader("AI/Data Readiness")
+        st.dataframe(readiness_report)
+
+        st.subheader("Use Case Readiness")
+        st.dataframe(use_case_report)
 
         st.subheader("Audit Summary")
         st.dataframe(audit_report)
@@ -526,6 +702,9 @@ if uploaded_file is not None:
         medium.metric("Medium", severity_summary["Medium severity"])
         low.metric("Low", severity_summary["Low severity"])
 
+        st.subheader("Column Health")
+        st.dataframe(column_health_report)
+
         st.subheader("Affected Rows")
         if affected_rows_report.empty:
             st.success("No affected rows found.")
@@ -543,6 +722,9 @@ if uploaded_file is not None:
             quality_score,
             recommendation_title,
             recommendation_message,
+            readiness_report,
+            use_case_report,
+            column_health_report,
         )
 
         st.download_button(
@@ -552,7 +734,12 @@ if uploaded_file is not None:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
-        cleaned_df, cleaning_summary = create_cleaned_dataset(df)
+        cleaned_df, cleaning_summary = create_cleaned_dataset(
+            df,
+            text_fill_value=text_fill_value,
+            numeric_fill_strategy=numeric_fill_strategy,
+            remove_duplicate_rows=remove_duplicate_rows,
+        )
         cleaned_excel_file = create_cleaned_excel_file(cleaned_df, cleaning_summary)
         st.subheader("Cleaned Dataset Summary")
         st.dataframe(cleaning_summary)
