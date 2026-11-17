@@ -19,6 +19,50 @@ VALID_STATUSES = ["Paid", "Pending", "Failed", "Reversed"]
 MAX_AFFECTED_ROWS = 1000
 
 
+def suggest_audit_columns(df):
+    """Suggest likely columns from their names, dtypes, and values."""
+    suggestions = {"date": None, "amount": None, "id": None, "status": None}
+    normalized_names = {column: clean_column_name(column) for column in df.columns}
+
+    for column, name in normalized_names.items():
+        series = df[column]
+        if suggestions["date"] is None and (
+            pd.api.types.is_datetime64_any_dtype(series)
+            or any(token in name for token in ("date", "time", "timestamp"))
+        ):
+            suggestions["date"] = column
+        if suggestions["amount"] is None and any(
+            token in name for token in ("amount", "price", "cost", "total", "balance", "quantity", "qty")
+        ):
+            suggestions["amount"] = column
+        if suggestions["id"] is None and (
+            name == "id" or name.endswith("_id") or "reference" in name or "transaction_no" in name
+        ):
+            suggestions["id"] = column
+        if suggestions["status"] is None and any(
+            token in name for token in ("status", "category", "type", "state", "segment")
+        ):
+            suggestions["status"] = column
+
+    # Fall back to value-based detection for generic headers. Exclude likely
+    # identifier columns from numeric suggestions.
+    for column in df.columns:
+        series = df[column]
+        nonblank = series[~series.map(is_blank)]
+        if not len(nonblank):
+            continue
+        if suggestions["date"] is None:
+            parsed = pd.to_datetime(nonblank, errors="coerce")
+            if parsed.notna().mean() >= 0.8:
+                suggestions["date"] = column
+        if suggestions["amount"] is None and column != suggestions["id"]:
+            parsed = pd.to_numeric(nonblank, errors="coerce")
+            if pd.api.types.is_numeric_dtype(series) or parsed.notna().mean() >= 0.8:
+                suggestions["amount"] = column
+
+    return suggestions
+
+
 def read_uploaded_file(file):
     file_name = file.name.lower()
 
@@ -56,14 +100,19 @@ def create_cleaned_dataset(
     text_fill_value="Not Available",
     numeric_fill_strategy="Mean",
     remove_duplicate_rows=True,
+    numeric_columns=None,
 ):
     cleaned_df = df.copy()
     cleaned_df.columns = [clean_column_name(column) for column in cleaned_df.columns]
     cleaning_steps = []
 
-    duplicate_rows_removed = int(cleaned_df.duplicated().sum())
+    numeric_columns = set(numeric_columns or [])
+    numeric_columns.update(cleaned_df.select_dtypes(include=["number"]).columns)
 
-    text_columns = cleaned_df.select_dtypes(include=["object"]).columns
+    text_columns = [
+        column for column in cleaned_df.select_dtypes(include=["object"]).columns
+        if column not in numeric_columns
+    ]
     for column in text_columns:
         cleaned_df[column] = cleaned_df[column].astype("string").str.strip()
         missing_count = int(cleaned_df[column].map(is_blank).sum())
@@ -82,19 +131,25 @@ def create_cleaned_dataset(
                 }
             )
 
-    numeric_columns = cleaned_df.select_dtypes(include=["number"]).columns
     for column in numeric_columns:
-        missing_count = int(cleaned_df[column].isna().sum())
+        if column not in cleaned_df.columns:
+            continue
+        original = cleaned_df[column]
+        numeric = pd.to_numeric(original, errors="coerce")
+        blank_mask = original.map(is_blank)
+        missing_count = int(blank_mask.sum())
 
         if missing_count > 0:
             if numeric_fill_strategy == "Median":
-                replacement_value = cleaned_df[column].median()
+                replacement_value = numeric.median()
             elif numeric_fill_strategy == "Zero":
                 replacement_value = 0
             else:
-                replacement_value = cleaned_df[column].mean()
+                replacement_value = numeric.mean()
 
-            cleaned_df[column] = cleaned_df[column].fillna(replacement_value)
+            if pd.isna(replacement_value):
+                replacement_value = 0
+            cleaned_df[column] = original.mask(blank_mask, replacement_value)
             cleaning_steps.append(
                 {
                     "column": column,
@@ -104,6 +159,7 @@ def create_cleaned_dataset(
                 }
             )
 
+    duplicate_rows_removed = int(cleaned_df.duplicated().sum())
     if remove_duplicate_rows:
         cleaned_df = cleaned_df.drop_duplicates()
 
@@ -151,8 +207,10 @@ def run_audit(
 
     audit_results = []
     affected_rows = []
+    affected_row_numbers = set()
 
     def add_affected_row(row_number, issue_type, column, current_value, recommendation):
+        affected_row_numbers.add(row_number)
         if len(affected_rows) < MAX_AFFECTED_ROWS:
             affected_rows.append(
                 {
@@ -212,7 +270,7 @@ def run_audit(
             audit_results.append(
                 {
                     "check": f"Duplicate values in {unique_column}",
-                    "issue_count": int(df[unique_column].duplicated().sum()),
+                    "issue_count": int(duplicate_values[unique_column].duplicated().sum()),
                     "severity": "High",
                     "recommendation": f"Review duplicate values in {unique_column}",
                 }
@@ -334,9 +392,8 @@ def run_audit(
     audit_report = pd.DataFrame(audit_results)
     affected_rows_report = pd.DataFrame(affected_rows)
 
-    total_issues = audit_report["issue_count"].sum()
-    total_checks = max(1, len(df) * len(audit_report))
-    quality_score = max(0, 100 - ((total_issues / total_checks) * 100))
+    affected_row_count = min(len(df), len(affected_row_numbers))
+    quality_score = 100 * (1 - affected_row_count / max(1, len(df)))
 
     return audit_report, affected_rows_report, round(quality_score, 2)
 
@@ -536,13 +593,13 @@ def get_dataset_summary(df):
     return {
         "Rows": len(df),
         "Columns": len(df.columns),
-        "Total missing values": int(df.isna().sum().sum()),
+        "Total missing values": int(df.apply(lambda column: column.map(is_blank)).sum().sum()),
         "Duplicate rows": int(df.duplicated().sum()),
     }
 
 
 def get_severity_summary(audit_report):
-    severity_counts = audit_report["severity"].value_counts().to_dict()
+    severity_counts = audit_report.groupby("severity")["issue_count"].sum().to_dict()
     return {
         "High severity": severity_counts.get("High", 0),
         "Medium severity": severity_counts.get("Medium", 0),
@@ -593,16 +650,28 @@ if uploaded_file is not None:
     st.caption("Detected columns: " + ", ".join(columns))
 
     left, right = st.columns(2)
+    suggestions = suggest_audit_columns(df)
     with left:
-        date_column = st.selectbox("Date column", column_options, index=0)
+        date_column = st.selectbox(
+            "Date column", column_options,
+            index=column_options.index(suggestions["date"]) if suggestions["date"] in column_options else 0,
+        )
         unique_column = st.selectbox(
             "ID/reference column for duplicate checks",
             column_options,
-            index=0,
+            index=column_options.index(suggestions["id"]) if suggestions["id"] in column_options else 0,
         )
     with right:
-        amount_column = st.selectbox("Amount/number column", column_options, index=0)
-        status_column = st.selectbox("Status/category column", column_options, index=0)
+        amount_column = st.selectbox(
+            "Amount/number column", column_options,
+            index=column_options.index(suggestions["amount"]) if suggestions["amount"] in column_options else 0,
+        )
+        status_column = st.selectbox(
+            "Status/category column", column_options,
+            index=column_options.index(suggestions["status"]) if suggestions["status"] in column_options else 0,
+        )
+
+    st.caption("Suggestions are based on column names and sample values. Review them before running the audit.")
 
     date_column = None if date_column == "None" else date_column
     amount_column = None if amount_column == "None" else amount_column
@@ -618,10 +687,15 @@ if uploaded_file is not None:
             .str.strip()
         )
         status_values = sorted(value for value in status_values.unique() if value)
+        known_statuses = [
+            value for value in status_values
+            if value.casefold() in {known.casefold() for known in VALID_STATUSES}
+        ]
         accepted_statuses = st.multiselect(
             "Accepted values for the selected status/category column",
             options=status_values,
-            default=status_values,
+            default=known_statuses,
+            help="Select values that are valid for your data. For custom categories, choose the valid values explicitly.",
         )
         valid_statuses = accepted_statuses
         st.caption(
@@ -641,7 +715,10 @@ if uploaded_file is not None:
     with clean_right:
         remove_duplicate_rows = st.checkbox("Remove duplicate rows", value=True)
 
-    if st.button("Run Audit"):
+    run_audit_clicked = st.button("Run Audit")
+    if run_audit_clicked and status_column and not valid_statuses:
+        st.warning("Choose at least one accepted value to run the category check, or set the category column to None.")
+    elif run_audit_clicked:
         audit_report, affected_rows_report, quality_score = run_audit(
             df,
             date_column=date_column,
@@ -653,6 +730,7 @@ if uploaded_file is not None:
 
         st.subheader("Data Quality Score")
         st.metric("Score", f"{quality_score}%")
+        st.caption("Score = percentage of dataset rows with no detected issues. Enabled smart checks affect which issues are counted.")
 
         recommendation_title, recommendation_message = get_overall_recommendation(
             quality_score
@@ -671,6 +749,7 @@ if uploaded_file is not None:
         column_health_report = get_column_health_report(df)
 
         st.subheader("AI/Data Readiness")
+        st.caption("This separate heuristic considers missingness, duplicate rows, detected issues, and header consistency.")
         st.dataframe(readiness_report)
 
         st.subheader("Use Case Readiness")
@@ -739,6 +818,7 @@ if uploaded_file is not None:
             text_fill_value=text_fill_value,
             numeric_fill_strategy=numeric_fill_strategy,
             remove_duplicate_rows=remove_duplicate_rows,
+            numeric_columns=[clean_column_name(amount_column)] if amount_column else [],
         )
         cleaned_excel_file = create_cleaned_excel_file(cleaned_df, cleaning_summary)
         st.subheader("Cleaned Dataset Summary")
