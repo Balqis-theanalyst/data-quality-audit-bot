@@ -17,13 +17,14 @@ DataTrust Audit helps users quickly understand whether a dataset is ready for an
 - Upload CSV or Excel datasets
 - Detect missing values across all columns
 - Detect duplicate rows
-- Select optional columns for deeper checks
+- Suggest likely date, ID, amount, and status columns from headers and sample values
+- Review column suggestions and choose additional columns for deeper checks
 - Check duplicate IDs or references
 - Check invalid dates
 - Check invalid numeric values
 - Check negative and zero values
-- Check invalid status or category values
-- Generate a data quality score
+- Check invalid status or category values against explicitly accepted values
+- Generate a data quality score based on the share of rows with no detected issues
 - Show an overall recommendation
 - Show a recommended next action
 - Generate an AI/Data Readiness score
@@ -32,7 +33,8 @@ DataTrust Audit helps users quickly understand whether a dataset is ready for an
 - Show affected rows with recommended actions
 - View simple issue charts
 - Download a multi-sheet Excel audit report
-- Choose how missing values should be handled in the cleaned dataset
+- Choose how missing text and numeric values should be handled in the cleaned dataset
+- Preserve invalid numeric strings so they remain visible for correction
 - Download a cleaned dataset with standardized headers, trimmed text values, filled missing values, and optional duplicate row removal
 - View a cleaning summary showing what changed in the cleaned dataset
 
@@ -75,10 +77,9 @@ The downloaded report contains:
 
 ## Future Improvements
 
-- Add automatic column suggestions
 - Add multi-source reconciliation checks
 - Add stronger cleaning rules users can choose before downloading cleaned data
-- Add user-selectable cleaning options for mean, median, zero, or custom fill values
+- Add custom numeric fill values and explicit treatment options for invalid values
 
 ## Author
 
